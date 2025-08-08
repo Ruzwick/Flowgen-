@@ -1,12 +1,11 @@
-// Firebase Auth + Firestore integration for Google Sign-In and cross-device sync
+// Firebase Auth + Firestore integration
 // 1) Fill in your Firebase web app config below
-// 2) Google provider sign-in
-// 3) Store tasks under users/{uid}/tasks in Firestore
+// 2) Store tasks under users/{uid}/tasks in Firestore
 
 // eslint-disable-next-line import/no-unresolved
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 // eslint-disable-next-line import/no-unresolved
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 // eslint-disable-next-line import/no-unresolved
 import { getFirestore, collection, doc, getDocs, onSnapshot, writeBatch, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -40,6 +39,8 @@ if (enabled) {
 } else {
   console.warn("Firebase not configured. Fill in firebaseConfig in auth.js to enable sign-in & sync.");
 }
+
+// Google sign-in removed; email/password only
 
 function getTasksCollectionRef(userId) {
   if (!db) return null;
@@ -149,6 +150,7 @@ function getUserLabel(user) {
 function wireAuthButtons() {
   const signInBtn = document.getElementById("signInBtn");
   const signOutBtn = document.getElementById("signOutBtn");
+  const emailAuthBtn = document.getElementById("emailAuthBtn");
   if (signInBtn) {
     signInBtn.addEventListener("click", async () => {
       if (!enabled) {
@@ -168,7 +170,6 @@ function wireAuthButtons() {
       } catch (err) {
         console.error("Sign-in failed (popup)", err);
         const code = err && err.code ? String(err.code) : "unknown";
-        // Fallback to redirect for environments where popups are blocked/unsupported
         if (
           code === "auth/popup-blocked" ||
           code === "auth/operation-not-supported-in-this-environment" ||
@@ -199,6 +200,59 @@ function wireAuthButtons() {
       }
     });
   }
+
+  // Email/Password modal wiring
+  const authModal = document.getElementById('authModal');
+  const emailAuthForm = document.getElementById('emailAuthForm');
+  const authCloseBtn = document.getElementById('authCloseBtn');
+  const authToggleMode = document.getElementById('authToggleMode');
+  const authSubmitBtn = document.getElementById('authSubmitBtn');
+  const authError = document.getElementById('authError');
+  const authModeLabel = document.getElementById('authModeLabel');
+  const authEmail = document.getElementById('authEmail');
+  const authPassword = document.getElementById('authPassword');
+
+  let isSignup = false;
+  function openAuth() { authModal && authModal.classList.remove('hidden'); setTimeout(() => authEmail && authEmail.focus(), 0); }
+  function closeAuth() { authModal && authModal.classList.add('hidden'); if (emailAuthForm) emailAuthForm.reset(); if (authError) authError.textContent = ''; }
+  function updateMode() {
+    if (authModeLabel) authModeLabel.textContent = isSignup ? 'Create account' : 'Sign in';
+    if (authToggleMode) authToggleMode.textContent = isSignup ? 'Have an account?' : 'Create account';
+    if (authSubmitBtn) authSubmitBtn.textContent = isSignup ? 'Create' : 'Continue';
+  }
+
+  if (emailAuthBtn) emailAuthBtn.addEventListener('click', () => { isSignup = false; updateMode(); openAuth(); });
+  if (authCloseBtn) authCloseBtn.addEventListener('click', closeAuth);
+  if (authToggleMode) authToggleMode.addEventListener('click', () => { isSignup = !isSignup; updateMode(); });
+  if (emailAuthForm) emailAuthForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!enabled) return;
+    try {
+      const email = authEmail && authEmail.value.trim();
+      const password = authPassword && authPassword.value;
+      if (!email || !password) throw new Error('Email and password are required');
+      if (isSignup) {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+      closeAuth();
+    } catch (err) {
+      if (authError) authError.textContent = err && err.message ? err.message : 'Authentication failed';
+    }
+  });
+  const authForgotBtn = document.getElementById('authForgotBtn');
+  if (authForgotBtn) authForgotBtn.addEventListener('click', async () => {
+    if (!enabled) return;
+    try {
+      const email = authEmail && authEmail.value.trim();
+      if (!email) { if (authError) authError.textContent = 'Enter your email first'; return; }
+      await sendPasswordResetEmail(auth, email);
+      if (authError) authError.textContent = 'Password reset email sent';
+    } catch (err) {
+      if (authError) authError.textContent = err && err.message ? err.message : 'Failed to send reset email';
+    }
+  });
 }
 
 // Expose minimal API to the rest of the app via window.Auth
@@ -223,6 +277,23 @@ window.Auth = {
     return listenRemoteTasks(auth.currentUser.uid, onChange);
   },
   getUserLabel,
+  async signInWithGoogleIdToken(idToken) {
+    if (!enabled) throw new Error("Auth not enabled");
+    if (!customAuthEndpoint || customAuthEndpoint.includes("YOUR_BACKEND_HOST")) {
+      throw new Error("Custom auth endpoint not configured");
+    }
+    const res = await fetch(customAuthEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: idToken }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data || !data.customToken) {
+      const msg = data && (data.error || data.message) ? (data.error || data.message) : `HTTP ${res.status}`;
+      throw new Error(`Exchange failed: ${msg}`);
+    }
+    await signInWithCustomToken(auth, String(data.customToken));
+  },
 };
 
 // Wire UI buttons and reflect auth state in the header
@@ -249,7 +320,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (signOutBtn) signOutBtn.style.display = user ? "" : "none";
   });
 
-  // Capture redirect result errors (e.g., unauthorized domain) and log them for diagnostics
   getRedirectResult(auth).catch((e) => {
     if (e && e.code) {
       console.error("Sign-in redirect error:", e.code, e.message);

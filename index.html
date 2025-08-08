@@ -39,8 +39,9 @@
         <div id="authControls" style="display: inline-flex; align-items: center; gap: 8px; margin-left: 6px;">
           <button id="signInBtn" class="btn">
             <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.35 11.1H12v2.8h5.32c-.23 1.46-1.6 4.28-5.32 4.28-3.21 0-5.83-2.66-5.83-5.94s2.62-5.94 5.83-5.94c1.83 0 3.06.77 3.76 1.43l2.56-2.47C16.76 3.61 14.6 2.6 12 2.6 6.98 2.6 2.9 6.7 2.9 11.74S6.98 20.9 12 20.9c6.9 0 9.1-4.81 9.1-7.31 0-.49-.05-.81-.12-1.49Z"/></svg>
-            Sign in
+            Google sign in
           </button>
+          <button id="emailAuthBtn" class="btn">Email sign in</button>
           <span id="userLabel" class="muted" style="display:none;"></span>
           <button id="signOutBtn" class="btn" style="display:none;">Sign out</button>
         </div>
@@ -146,6 +147,36 @@
           <div class="form-actions">
             <button type="button" class="btn" id="cancelBtn">Cancel</button>
             <button type="submit" class="btn primary" id="saveBtn">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Auth Modal (Email/Password) -->
+    <div id="authModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="authModalTitle"><span id="authModeLabel">Sign in</span></h3>
+          <button class="icon-btn" id="authCloseBtn" aria-label="Close">
+            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+        <form id="emailAuthForm" class="form" novalidate>
+          <div class="field">
+            <label for="authEmail">Email</label>
+            <input id="authEmail" type="email" placeholder="you@example.com" required />
+          </div>
+          <div class="field">
+            <label for="authPassword">Password</label>
+            <input id="authPassword" type="password" placeholder="••••••••" required />
+          </div>
+          <small id="authError" class="error" aria-live="polite"></small>
+          <div class="form-actions" style="justify-content: space-between;">
+            <button type="button" class="btn subtle" id="authToggleMode">Create account</button>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button type="button" class="btn" id="authForgotBtn">Forgot?</button>
+              <button type="submit" class="btn primary" id="authSubmitBtn">Continue</button>
+            </div>
           </div>
         </form>
       </div>
