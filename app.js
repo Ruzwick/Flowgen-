@@ -1,12 +1,15 @@
 // Task Manager - Vanilla JS
 // Data model version
 const STORAGE_KEY = "taskManager.v1";
+let applyingRemote = false; // prevents sync loops when applying remote snapshots
+let unsubscribeRemote = null; // Firestore listener unsubscribe
 
 /**
  * @typedef {Object} Task
  * @property {string} id
  * @property {string} title
  * @property {string} description
+ * @property {Object.<string, string>=} notesByUser
  * @property {string|null} dueDate // yyyy-mm-dd or null
  * @property {"low"|"medium"|"high"} priority
  * @property {"open"|"done"} status
@@ -66,6 +69,7 @@ const dom = {
 
 // Utils
 const isString = (v) => typeof v === "string";
+const isRecord = (v) => v && typeof v === "object" && !Array.isArray(v);
 const nowIso = () => new Date().toISOString();
 const safeJsonParse = (str, fallback) => {
   try { return JSON.parse(str); } catch { return fallback; }
@@ -111,6 +115,9 @@ function loadState() {
     id: isString(t.id) ? t.id : generateId(),
     title: isString(t.title) ? t.title : "Untitled",
     description: isString(t.description) ? t.description : "",
+    notesByUser: isRecord(t.notesByUser)
+      ? Object.fromEntries(Object.entries(t.notesByUser).filter(([k, v]) => isString(k) && isString(v)))
+      : undefined,
     dueDate: t.dueDate || null,
     priority: ["low", "medium", "high"].includes(t.priority) ? t.priority : "medium",
     status: t.status === "done" ? "done" : "open",
@@ -127,6 +134,20 @@ function scheduleSave() {
   saveTimeout = setTimeout(() => {
     const payload = { tasks: state.tasks };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    // If signed in, also persist to remote
+    try {
+      if (
+        window.Auth &&
+        window.Auth.isEnabled() &&
+        window.Auth.isSignedIn() &&
+        !applyingRemote
+      ) {
+        // Fire and forget; debounce already applied
+        window.Auth.saveAllTasks(state.tasks);
+      }
+    } catch (e) {
+      console.warn("Remote save failed", e);
+    }
   }, 150);
 }
 
@@ -232,10 +253,10 @@ function renderTaskCard(task) {
   titleRow.appendChild(titleText);
 
   const desc = document.createElement("div");
-  if (task.description) {
-    desc.textContent = task.description;
-    desc.style.color = "var(--muted)";
-    desc.style.fontSize = "13px";
+  const notes = getTaskNotes(task);
+  if (notes) {
+    desc.textContent = notes;
+    desc.className = "notes";
   }
 
   const meta = document.createElement("div");
@@ -309,6 +330,7 @@ function addTask(payload) {
     id: generateId(),
     title: payload.title,
     description: payload.description || "",
+    notesByUser: undefined,
     dueDate: payload.dueDate || null,
     priority: payload.priority || "medium",
     status: "open",
@@ -317,6 +339,10 @@ function addTask(payload) {
     updatedAt: nowIso(),
     completedAt: null,
   });
+  const uid = currentUid();
+  if (uid) {
+    task.notesByUser = { [uid]: task.description };
+  }
   state.tasks.unshift(task);
   scheduleSave();
   render();
@@ -327,6 +353,14 @@ function updateTask(id, updates) {
   if (idx === -1) return;
   const prev = state.tasks[idx];
   const next = { ...prev, ...updates, updatedAt: nowIso() };
+  if (Object.prototype.hasOwnProperty.call(updates, "description")) {
+    const uid = currentUid();
+    if (uid) {
+      const map = isRecord(prev.notesByUser) ? { ...prev.notesByUser } : {};
+      map[uid] = String(updates.description || "");
+      next.notesByUser = map;
+    }
+  }
   if (prev.status !== "done" && next.status === "done") next.completedAt = nowIso();
   if (prev.status === "done" && next.status !== "done") next.completedAt = null;
   state.tasks[idx] = next;
@@ -379,7 +413,7 @@ function openEditModal(id) {
   dom.fieldId.value = task.id;
   dom.fieldTitle.value = task.title;
   dom.fieldTitleError.textContent = "";
-  dom.fieldDesc.value = task.description || "";
+  dom.fieldDesc.value = getTaskNotes(task) || "";
   dom.fieldDue.value = task.dueDate || "";
   dom.fieldPriority.value = task.priority;
   dom.fieldTags.value = task.tags.join(", ");
@@ -524,10 +558,77 @@ function bindEvents() {
 // Boot
 function main() {
   loadState();
+  initAuthSync();
   bindEvents();
   render();
 }
 
 document.addEventListener("DOMContentLoaded", main);
+
+// Auth + Cloud sync
+function initAuthSync() {
+  if (!window.Auth || !window.Auth.isEnabled()) return;
+  window.Auth.onAuthStateChanged(async (user) => {
+    // Tear down any prior listener
+    if (typeof unsubscribeRemote === "function") {
+      try { unsubscribeRemote(); } catch {}
+      unsubscribeRemote = null;
+    }
+
+    if (user) {
+      try {
+        // On first sign-in per session: resolve initial state
+        const remoteTasks = await window.Auth.readAllTasks();
+        if (remoteTasks && remoteTasks.length > 0) {
+          applyingRemote = true;
+          state.tasks = remoteTasks;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks: state.tasks }));
+          render();
+          applyingRemote = false;
+        } else if (state.tasks.length > 0) {
+          // Remote empty, push local up
+          await window.Auth.saveAllTasks(state.tasks);
+        }
+
+        // Start live listener for cross-device updates
+        unsubscribeRemote = window.Auth.listenTasks((tasks) => {
+          applyingRemote = true;
+          state.tasks = Array.isArray(tasks) ? tasks : [];
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks: state.tasks }));
+          render();
+          applyingRemote = false;
+        });
+      } catch (e) {
+        console.error("Failed to initialize remote sync", e);
+      }
+    } else {
+      // Signed out: clear local tasks and storage, show empty state
+      applyingRemote = true;
+      state.tasks = [];
+      try { localStorage.removeItem(STORAGE_KEY); } catch {}
+      render();
+      applyingRemote = false;
+    }
+  });
+}
+
+// Helpers for per-user notes
+function currentUid() {
+  try {
+    if (window.Auth && window.Auth.isEnabled() && window.Auth.isSignedIn()) {
+      const u = window.Auth.currentUser();
+      return u && u.uid ? u.uid : null;
+    }
+  } catch {}
+  return null;
+}
+
+function getTaskNotes(task) {
+  const uid = currentUid();
+  if (uid && task && task.notesByUser && typeof task.notesByUser[uid] === 'string') {
+    return task.notesByUser[uid] || "";
+  }
+  return task && typeof task.description === 'string' ? task.description : "";
+}
 
 
