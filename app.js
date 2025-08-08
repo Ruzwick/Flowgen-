@@ -577,27 +577,31 @@ function initAuthSync() {
 
     if (user) {
       try {
-        // On first sign-in per session: resolve initial state
+        // Start live listener for cross-device updates first
+        unsubscribeRemote = window.Auth.listenTasks((tasks) => {
+          // Avoid flicker to empty if we already have tasks displayed
+          if ((!tasks || tasks.length === 0) && state.tasks.length > 0) {
+            return;
+          }
+          applyingRemote = true;
+          state.tasks = Array.isArray(tasks) ? tasks : [];
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks: state.tasks })); } catch {}
+          render();
+          applyingRemote = false;
+        });
+
+        // One-time fetch to immediately populate if listener hasn't fired yet
         const remoteTasks = await window.Auth.readAllTasks();
         if (remoteTasks && remoteTasks.length > 0) {
           applyingRemote = true;
           state.tasks = remoteTasks;
-          localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks: state.tasks }));
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks: state.tasks })); } catch {}
           render();
           applyingRemote = false;
         } else if (state.tasks.length > 0) {
           // Remote empty, push local up
           await window.Auth.saveAllTasks(state.tasks);
         }
-
-        // Start live listener for cross-device updates
-        unsubscribeRemote = window.Auth.listenTasks((tasks) => {
-          applyingRemote = true;
-          state.tasks = Array.isArray(tasks) ? tasks : [];
-          localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks: state.tasks }));
-          render();
-          applyingRemote = false;
-        });
       } catch (e) {
         console.error("Failed to initialize remote sync", e);
       }

@@ -6,7 +6,7 @@
 // eslint-disable-next-line import/no-unresolved
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 // eslint-disable-next-line import/no-unresolved
-import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 // eslint-disable-next-line import/no-unresolved
 import { getFirestore, collection, doc, getDocs, onSnapshot, writeBatch, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -157,10 +157,35 @@ function wireAuthButtons() {
       }
       try {
         const provider = new GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: "select_account" });
+        const isGithubPages = typeof location !== 'undefined' && location.hostname.endsWith('.github.io');
+        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+        if (isGithubPages || isMobile) {
+          await signInWithRedirect(auth, provider);
+          return;
+        }
         await signInWithPopup(auth, provider);
       } catch (err) {
-        console.error("Sign-in failed", err);
-        alert("Sign-in failed. See console for details.");
+        console.error("Sign-in failed (popup)", err);
+        const code = err && err.code ? String(err.code) : "unknown";
+        // Fallback to redirect for environments where popups are blocked/unsupported
+        if (
+          code === "auth/popup-blocked" ||
+          code === "auth/operation-not-supported-in-this-environment" ||
+          code === "auth/unauthorized-domain"
+        ) {
+          try {
+            const provider = new GoogleAuthProvider();
+            provider.setCustomParameters({ prompt: "select_account" });
+            await signInWithRedirect(auth, provider);
+            return;
+          } catch (redirErr) {
+            console.error("Sign-in failed (redirect)", redirErr);
+            alert(`Sign-in failed: ${redirErr && redirErr.message ? redirErr.message : "See console"}`);
+            return;
+          }
+        }
+        alert(`Sign-in failed: ${err && err.message ? err.message : "See console for details"}`);
       }
     });
   }
@@ -222,6 +247,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (signInBtn) signInBtn.style.display = user ? "none" : "";
     if (signOutBtn) signOutBtn.style.display = user ? "" : "none";
+  });
+
+  // Capture redirect result errors (e.g., unauthorized domain) and log them for diagnostics
+  getRedirectResult(auth).catch((e) => {
+    if (e && e.code) {
+      console.error("Sign-in redirect error:", e.code, e.message);
+    }
   });
 });
 
